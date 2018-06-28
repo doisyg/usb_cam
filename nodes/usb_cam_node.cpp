@@ -269,6 +269,7 @@ public:
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "usb_cam");
+  ROS_INFO("Starting usb_cam src");
   usb_cam::UsbCamNode a;
   a.spin();
   return EXIT_SUCCESS;

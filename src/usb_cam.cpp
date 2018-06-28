@@ -58,6 +58,21 @@
 
 namespace usb_cam {
 
+
+static AVBufferRef *hw_device_ctx = NULL;
+static enum AVPixelFormat hw_pix_fmt;
+static FILE *output_file = NULL;
+AVFormatContext *input_ctx = NULL;
+int video_stream, ret;
+AVStream *video = NULL;
+AVCodecContext *decoder_ctx = NULL;
+AVCodec *decoder = NULL;
+AVPacket packet;
+enum AVHWDeviceType type;
+int i;
+
+
+
 static void errno_exit(const char * s)
 {
   ROS_ERROR("%s error %d, %s", s, errno, strerror(errno));
@@ -363,25 +378,89 @@ UsbCam::~UsbCam()
   shutdown();
 }
 
+int UsbCam::hw_decoder_init(AVCodecContext *ctx, const enum AVHWDeviceType type)
+{
+    int err = 0;
+
+    if ((err = av_hwdevice_ctx_create(&hw_device_ctx, type,
+                                      NULL, NULL, 0)) < 0) {
+        fprintf(stderr, "Failed to create specified HW device.\n");
+        return err;
+    }
+    ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+
+    return err;
+}
+
+enum AVPixelFormat UsbCam::get_hw_format(AVCodecContext *ctx,
+                                        const enum AVPixelFormat *pix_fmts)
+{
+    const enum AVPixelFormat *p;
+
+    for (p = pix_fmts; *p != -1; p++) {
+        if (*p == hw_pix_fmt)
+            return *p;
+    }
+
+    fprintf(stderr, "Failed to get HW surface format.\n");
+    return AV_PIX_FMT_NONE;
+}
+
+
 int UsbCam::init_mjpeg_decoder(int image_width, int image_height)
 {
-  avcodec_register_all();
-
   avcodec_ = avcodec_find_decoder(AV_CODEC_ID_MJPEG);
   if (!avcodec_)
   {
     ROS_ERROR("Could not find MJPEG decoder");
     return 0;
   }
+  avcodec_register_all();
+
+  //************
+  type = av_hwdevice_find_type_by_name("vaapi");
+  if (type == AV_HWDEVICE_TYPE_NONE) {
+      fprintf(stderr, "Device type %s is not supported.\n", "vaapi");
+      fprintf(stderr, "Available device types:");
+      while((type = av_hwdevice_iterate_types(type)) != AV_HWDEVICE_TYPE_NONE)
+          fprintf(stderr, " %s", av_hwdevice_get_type_name(type));
+      fprintf(stderr, "\n");
+      return -1;
+  }
+
+
+  for (i = 0;; i++) {
+      const AVCodecHWConfig *config = avcodec_get_hw_config(avcodec_, i);
+      if (!config) {
+          fprintf(stderr, "Decoder %s does not support device type %s.\n",
+                  decoder->name, av_hwdevice_get_type_name(type));
+          return -1;
+      }
+      if (config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX &&
+          config->device_type == type) {
+          hw_pix_fmt = config->pix_fmt;
+          break;
+      }
+  }
+  //*************
+
+
+
+
+
+
 
   avcodec_context_ = avcodec_alloc_context3(avcodec_);
-#if LIBAVCODEC_VERSION_MAJOR < 55
-  avframe_camera_ = avcodec_alloc_frame();
-  avframe_rgb_ = avcodec_alloc_frame();
-#else
+
+  //*********
+  //avcodec_context_->get_format = V4L2_PIX_FMT_MJPEG;
+  if (hw_decoder_init(avcodec_context_, type) < 0)
+      return -1;
+  //********
+
   avframe_camera_ = av_frame_alloc();
   avframe_rgb_ = av_frame_alloc();
-#endif
+
 
   avpicture_alloc((AVPicture *)avframe_rgb_, AV_PIX_FMT_RGB24, image_width, image_height);
 
@@ -389,10 +468,9 @@ int UsbCam::init_mjpeg_decoder(int image_width, int image_height)
   avcodec_context_->width = image_width;
   avcodec_context_->height = image_height;
 
-#if LIBAVCODEC_VERSION_MAJOR > 52
   avcodec_context_->pix_fmt = AV_PIX_FMT_YUV422P;
   avcodec_context_->codec_type = AVMEDIA_TYPE_VIDEO;
-#endif
+
 
   avframe_camera_size_ = avpicture_get_size(AV_PIX_FMT_YUV422P, image_width, image_height);
   avframe_rgb_size_ = avpicture_get_size(AV_PIX_FMT_RGB24, image_width, image_height);

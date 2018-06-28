@@ -44,6 +44,13 @@ extern "C"
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libavutil/mem.h>
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/pixdesc.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/opt.h>
+#include <libavutil/avassert.h>
+#include <libavutil/imgutils.h>
 }
 
 // legacy reasons
@@ -127,6 +134,10 @@ class UsbCam {
   void close_device(void);
   void open_device(void);
   void grab_image();
+
+  int hw_decoder_init(AVCodecContext *ctx, const enum AVHWDeviceType type);
+  enum AVPixelFormat get_hw_format(AVCodecContext *ctx, const enum AVPixelFormat *pix_fmts);
+
   bool is_capturing_;
 
 
